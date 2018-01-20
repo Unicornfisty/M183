@@ -110,7 +110,7 @@ namespace M183.Controllers
                 {
                     con.Close();
                     //Change to db number
-                    return Check2Factor("+41787791910", user_id, username, password);
+                    return Check2Factor("41765480052", user_id, username, password);
                 }
                 con.Close();
             }
@@ -256,6 +256,7 @@ namespace M183.Controllers
             ViewBag.username = username;
             ViewBag.password = password;
             Session["Token"] = secret;
+            
             return RedirectToAction("TokenLogin", "Home");
         }
 
