@@ -1,0 +1,22 @@
+﻿
+@{
+    ViewBag.Title = "TokenLogin";
+}
+
+<h2>TokenLogin</h2>
+<div class="row" style="margin-top:80px;">
+
+    <div class="col-lg-8 col-lg-offset-2">
+
+        <form action="~/Home/DoCheckTwoFactor" method="post" class="well col-lg-8 col-lg-offset-2" style="margin-top:60px;">
+            <div>Please enter the token, that was sent to your mobilephone:</div>
+            <input type="text" name="token" value="" class="form-control" />
+            <input type="text" name="username" value="@(ViewBag.username)" class="form-control" />
+            <input type="password" name="password" value="@(ViewBag.password)" class="form-control" />
+            <br />
+            <input type="submit" name="" value="Verify" class="btn btn-primary">
+
+        </form>
+
+    </div>
+</div>

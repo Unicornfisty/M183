@@ -1,8 +1,13 @@
 ﻿using M183.Models;
+using Nexmo.Api;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Security.Principal;
+using System.Text;
 using System.Web;
 using System.Web.Mvc;
 
@@ -11,6 +16,10 @@ namespace M183.Controllers
     public class HomeController : Controller
     {
         public ActionResult Index()
+        {
+            return View();
+        }
+        public ActionResult Login()
         {
             return View();
         }
@@ -80,63 +89,30 @@ namespace M183.Controllers
 
             // check the credentails from the database - caution: SQL Injection should be prevented additionally!
             SqlCommand cmd_credentials = new SqlCommand();
-            cmd_credentials.CommandText = "SELECT [Id] FROM [dbo].[User] WHERE [Username] = '" + username + "' AND [Password] = '" + password + "'";
+            cmd_credentials.CommandText = "SELECT [Id], [Username], [Role], [Status], [Mobilephonenumber] FROM [dbo].[User] WHERE [Username] = '" + username + "' AND [Password] = '" + password + "'";
             cmd_credentials.Connection = con;
 
             con.Open();
 
             SqlDataReader reader_credentials = cmd_credentials.ExecuteReader();
 
-            if (reader_credentials.HasRows) // ok - result was found
+            if (reader_credentials.HasRows || (string)Session["TwoFactorOk"] == "true") // ok - result was found
             {
+                Session["username"] = username;
                 var user_id = 0;
+                
                 while (reader_credentials.Read())
                 {
                     user_id = reader_credentials.GetInt32(0); // get the user id
-                    break;
+                    Session["userid"] = user_id;
                 }
-
+                if ((string)Session["TwoFactorOk"] == null)
+                {
+                    con.Close();
+                    //Change to db number
+                    return Check2Factor("+41787791910", user_id, username, password);
+                }
                 con.Close();
-                con.Open();
-
-                // check, whether user uses a known browser?
-                SqlCommand cmd_user_using_usual_browser = new SqlCommand();
-                cmd_user_using_usual_browser.CommandText = "SELECT Id FROM [dbo].[UserLog] WHERE [UserId] = '" +
-                                                user_id + "' AND [IP] LIKE '" + ip.Substring(0, 2) + "%' AND browser LIKE '" + platform + "%'";
-                cmd_user_using_usual_browser.Connection = con;
-
-                SqlDataReader reader_usual_browser = cmd_user_using_usual_browser.ExecuteReader();
-
-                if (!reader_usual_browser.HasRows)
-                {
-                    // -> inform user that he / she is maybe not using a usual browser and is accessing the application from a different ip range i.e. from abroad
-                    // both signs, that this login is not done by a valid user -> credentials stolen?
-
-                    con.Close();
-                    con.Open();
-
-                    // log this user-behaviour anyway
-                    SqlCommand log_cmd = new SqlCommand();
-                    log_cmd.CommandText = "INSERT INTO [dbo].[UserLog] (UserId, IP, Action, Result, CreatedOn, Browser, AdditionalInformation) VALUES('" + user_id + "', '" +
-                        ip + "', 'login', 'success', GETDATE(), '" + platform + "', 'other browser')";
-                    log_cmd.Connection = con;
-                    log_cmd.ExecuteReader();
-                }
-                else
-                {
-
-                    con.Close();
-                    con.Open();
-
-                    // everything should be fine
-                    // log this user-behaviour
-                    // log this user-behaviour anyway
-                    SqlCommand log_cmd = new SqlCommand();
-                    log_cmd.CommandText = "INSERT INTO [dbo].[UserLog] (UserId, IP, Action, Result, CreatedOn, Browser) VALUES('" + user_id + "', '" +
-                        ip + "', 'login', 'success', GETDATE(), '" + platform + "')";
-                    log_cmd.Connection = con;
-                    log_cmd.ExecuteReader();
-                }
             }
             else
             {
@@ -184,11 +160,15 @@ namespace M183.Controllers
                         }
                     }
 
+                    con.Close();
+                    con.Open();
                     if (attempts >= 3 || password.Length < 4 || password.Length > 20) // depends on the application context!
                     {
-                        // block user!
+                        SqlCommand block_cmd = new SqlCommand();
+                        block_cmd.CommandText = "UPDATE [dbo].[User] SET [Status] = 'Blocked' WHERE [Id] = '" + user_id.ToString() + "'";
+                        block_cmd.Connection = con;
+                        block_cmd.ExecuteReader();
                     }
-
                     con.Close();
                     con.Open();
 
@@ -222,7 +202,133 @@ namespace M183.Controllers
 
             con.Close();
 
-            return RedirectToAction("Logs", "Home");
+            return RedirectToAction("Login", "Home");
+        }
+
+        public ActionResult Logout()
+        {
+            Session.Clear();
+            return RedirectToAction("Index");
+        } 
+
+        public ActionResult Check2Factor(string to, int userId, string username, string password)
+        {
+            SqlConnection con = new SqlConnection();
+            con.ConnectionString = "Data Source=(LocalDB)\\MSSQLLocalDB;AttachDbFilename=C:\\VS\\M183\\Ressourcen_Projekt\\m183_project.mdf;" +
+                "Integrated Security=True;Connect Timeout=30";
+
+            var request = (HttpWebRequest)WebRequest.Create("https://rest.nexmo.com/sms/json");
+
+            var secret = "1234";
+
+            var postData = "api_key=4de9ebde";
+            postData += "&api_secret=b4a730dd9192692e";
+            postData += "&to="+to;
+            postData += "&from=\"\"NEXMO\"\"";
+            postData += "&text=\"" + secret + "\"";
+            var data = Encoding.ASCII.GetBytes(postData);
+
+            request.Method = "POST";
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.ContentLength = data.Length;
+
+            using (var stream = request.GetRequestStream())
+            {
+                stream.Write(data, 0, data.Length);
+            }
+
+            var response = (HttpWebResponse)request.GetResponse();
+
+            var responseString = new StreamReader(response.GetResponseStream()).ReadToEnd();
+            //con.Open();
+
+            //// not even the username is correct!
+            //// log it with user_id = 0
+            //// log this user-behaviour anyway
+            //double time = 5;
+            //SqlCommand log_cmd = new SqlCommand();
+            //log_cmd.CommandText = "INSERT INTO [dbo].[Token] (Token, UserId, Expiry) " +
+            //    "VALUES('" + secret + "', " + userId + ", '" + (DateTime.Now.AddMinutes(time)) + "')";
+            //log_cmd.Connection = con;
+            //log_cmd.ExecuteReader();
+
+            ////con.Close();
+            ViewBag.username = username;
+            ViewBag.password = password;
+            Session["Token"] = secret;
+            return RedirectToAction("TokenLogin", "Home");
+        }
+
+        public ActionResult TokenLogin()
+        {
+            return View();
+        }
+
+        [HttpPost]
+        public ActionResult DoCheckTwoFactor()
+        {
+            var username = Request["username"];
+            var password = Request["password"];
+            var code = Request["token"];
+
+            SqlConnection con = new SqlConnection();
+            con.ConnectionString = "Data Source=(LocalDB)\\MSSQLLocalDB;AttachDbFilename=C:\\VS\\M183\\Ressourcen_Projekt\\m183_project.mdf;" +
+                "Integrated Security=True;Connect Timeout=30";
+            //con.Open();
+
+            //// check, whether user has already 5 login attempts
+            //// or password does by far not match the systems reccommendations
+            //// => Block the user
+            //SqlCommand check = new SqlCommand();
+            //check.CommandText = "SELECT [Id], [Token], [UserId], [Expiry], [DeletedOn] FROM [dbo].[Token] WHERE UserId = ";
+            //check.Connection = con;
+            //SqlDataReader failed_login_count = check.ExecuteReader();
+
+            if ((string)Session["Token"] == code)
+            {
+                Session["TwoFactorOk"] = "true";
+                ViewBag.username = username;
+                ViewBag.password = password;
+
+                SqlCommand cmd_credentials = new SqlCommand();
+                cmd_credentials.CommandText = "SELECT [Id], [Username], [Role], [Status], [Mobilephonenumber] FROM [dbo].[User] WHERE [Username] = '" + username + "' AND [Password] = '" + password + "'";
+                cmd_credentials.Connection = con;
+
+                con.Open();
+
+                SqlDataReader reader_credentials = cmd_credentials.ExecuteReader();
+                string status = "";
+                string role = "";
+
+                while (reader_credentials.Read())
+                {
+                    role = reader_credentials.GetString(2);
+                    status = reader_credentials.GetString(3);
+                }
+
+                if (status != "blocked")
+                {
+                    if (role == "admin")
+                    {
+                        Session["role"] = "admin";
+                        con.Close();
+                        return RedirectToAction("Dashboard", "Admin");
+                    }
+                    else if (role == "user")
+                    {
+                        Session["role"] = "user";
+                        con.Close();
+                        return RedirectToAction("Dashboard", "User");
+                    }
+                }
+                ViewBag.Message = "You are currently blocked!";
+                con.Close();
+            }
+            else
+            {
+                Session["TwoFactorOk"] = "false";
+            }
+            return RedirectToAction("Login", "Home");
         }
     }
 }
